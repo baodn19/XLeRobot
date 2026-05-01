@@ -83,9 +83,9 @@ FULL_START_POS = {
 
 # Task parameters
 TASK_DESCRIPTION = "Pick up the K-cup and place it in the carton box."
-HF_REPO_ID = "baodn19/pick_place_K_cup_pi05"
+HF_REPO_ID = "/home/era-agx-orin/ERA_Lab/xlerobot/tasks/pick_place_K_cup_pi05"
 FPS = 30 # Match the FPS of the camera
-NUM_EPISODES = 50
+NUM_EPISODES = 2
 EPISODE_TIME_SEC = 120
 
 # local helper that clears the existing queues and cached goals under the monitor lock.
@@ -107,7 +107,7 @@ class SimpleTeleopArm:
     for smooth movement and gripper operations based on VR controller input.
     """
     
-    def __init__(self, joint_map, initial_obs, prefix="right", kp=0.75):
+    def __init__(self, joint_map, initial_obs, prefix="right", kp=0.75): # OG: kp = 0.75
         self.joint_map = joint_map
         self.prefix = prefix
         self.kp = kp
@@ -160,7 +160,9 @@ class SimpleTeleopArm:
         self.ref_action_when_disabled = None
         
         # Delta control state variables for VR input
-        self.vr_relative_position_scaling = 4 # OG: 1.2
+        self.vr_relative_position_scaling = 3.3 # OG: 1.2
+        self.vr_side_position_scaling = 9      # new: shoulder pan / side-to-side gain
+        self.vr_relative_rotation_scaling = 3  # new: wrist rotation gain   
         self.gripper_vel_step = 1.2
         self.debug_vr_mapping = True
         self._last_vr_debug_print_t = 0.0
@@ -346,10 +348,10 @@ class SimpleTeleopArm:
         # y     | -x
         # z     |  y
         delta_x = -vr_relative_position[2] * self.vr_relative_position_scaling
-        delta_y = -vr_relative_position[0] * self.vr_relative_position_scaling
+        delta_y = -vr_relative_position[0] * self.vr_side_position_scaling
         delta_z = vr_relative_position[1] * self.vr_relative_position_scaling
 
-        ee_relative_rotvec = self.vr_ctrl_to_ee.apply(vr_relative_rotvec)
+        ee_relative_rotvec = self.vr_ctrl_to_ee.apply(vr_relative_rotvec) * self.vr_relative_rotation_scaling
         delta_wx = ee_relative_rotvec[0]
         delta_wy = ee_relative_rotvec[1]
         delta_wz = ee_relative_rotvec[2]
