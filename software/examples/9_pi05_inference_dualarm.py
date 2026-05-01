@@ -14,7 +14,7 @@ from scipy.spatial.transform import Rotation
 import numpy as np
 
 # Local imports
-from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
+from lerobot.robots.xlerobot_2wheels import XLerobot2WheelsConfig, XLerobot2Wheels
 from lerobot.utils.robot_utils import precise_sleep
 
 from lerobot.utils.quadratic_spline_via_ipol import Via, Limits, QuadraticSplineInterpolator
@@ -62,11 +62,11 @@ FULL_START_POS = {
     "right_arm_gripper": 50.0,
 }
 
-TASK_DESCRIPTION = "Put the pieces on the table into the box and close the lid"
+TASK_DESCRIPTION = "Pick up the K-cup and place it in the carton box."
 FPS = 50
 NUM_EPISODES = 2
 EPISODE_TIME_SEC = 600
-OPENPI_SERVER_IP = "xxx.xxx.x.xx" # ip address of the server that provides pi05 inference as service
+OPENPI_SERVER_IP = "192.168.50.40" # ip address of the server that provides pi05 inference as service
 
 class SimpleArmControl:
     """
@@ -109,9 +109,9 @@ class SimpleArmControl:
         
         # 1) Read current joint positions (calibrated if provided)
         if self.prefix=="left":
-            obs_raw = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
+            obs_raw = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
         else:
-            obs_raw = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
+            obs_raw = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
         obs = {j: obs_raw[f"{self.joint_map[j]}"] for j in self.joint_map}
 
         # 2) choose names in the order of home_positions, filter to those present in obs
@@ -170,9 +170,9 @@ class SimpleArmControl:
         for k_step in range(len(t)):
             
             if self.prefix=="left":
-                obs_raw = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
+                obs_raw = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
             else:
-                obs_raw = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
+                obs_raw = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
             obs = {j: obs_raw[f"{self.joint_map[j]}"] for j in self.joint_map}
 
             q_meas = np.array([float(obs[n]) for n in names], dtype=float)
@@ -193,9 +193,9 @@ class SimpleArmControl:
     
     def p_control_action(self, robot):
         if self.prefix=="left":
-            obs_raw = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
+            obs_raw = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
         else:
-            obs_raw = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
+            obs_raw = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
 
         obs_pos_suffix = {}
         obs_no_prefix = {}
@@ -243,8 +243,8 @@ class JointIpol:
             self.ctrl_freq = ctrl_freq
             
             # 1) Read current joint positions
-            left_obs = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
-            right_obs = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
+            left_obs = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
+            right_obs = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
             obs = {**left_obs, **right_obs}
             print(f"current pos: {obs}")
 
@@ -299,8 +299,8 @@ class JointIpol:
         if self.ipol_path is None:
             return {}
         
-        left_obs = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
-        right_obs = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
+        left_obs = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
+        right_obs = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
         obs = {**left_obs, **right_obs}
 
         q_meas = np.array([float(obs[n]) for n in self.joint_names], dtype=float)
@@ -358,8 +358,22 @@ def main():
     robot = None
     robot_name = "xlerobot"
     try:
-        robot_config = XLerobotConfig(id=robot_name, use_degrees=True)
-        robot = XLerobot(robot_config)
+        from lerobot.cameras.opencv.camera_opencv import OpenCVCameraConfig
+
+        robot_config = XLerobot2WheelsConfig(id=robot_name, use_degrees=True)
+
+        # Force MJPG compression to avoid USB bandwidth saturation
+        robot_config.cameras["left_wrist"] = OpenCVCameraConfig(
+            index_or_path='/dev/video0', fps=30, width=640, height=480, fourcc='MJPG'
+        )
+        robot_config.cameras["right_wrist"] = OpenCVCameraConfig(
+            index_or_path='/dev/video2', fps=30, width=640, height=480, fourcc='MJPG'
+        )
+        robot_config.cameras["head"] = OpenCVCameraConfig(
+            index_or_path='/dev/video4', fps=30, width=640, height=480, fourcc='MJPG'
+        )
+        
+        robot = XLerobot2Wheels(robot_config)
         robot.connect()
 
         #Init the keyboard instance
@@ -370,8 +384,8 @@ def main():
         print(f"[INIT] Successfully connected to robot")
         if robot.is_calibrated:
             print(f"[INIT] Robot is calibrated and ready to use!")
-            print(f"[INIT] Motor bus_left_base info: {robot.bus_left_base.motors}")
-            print(f"[INIT] Motor bus_right_head info: {robot.bus_right_head.motors}")
+            print(f"[INIT] Motor bus1 info: {robot.bus1.motors}")
+            print(f"[INIT] Motor bus2 info: {robot.bus2.motors}")
         else:
             print(f"[INIT] Robot requires calibration")
 
@@ -394,6 +408,25 @@ def main():
         joint_ipol.plan_to_target(robot, left_arm, right_arm, ctrl_freq=200, target_positions=FULL_START_POS)
         joint_ipol.execute_plan(robot, left_arm, right_arm)
         print("✅ Robot in start pose")
+
+        # Replace the current check logic (around line 421)
+        print("Checking all camera streams...")
+        for i in range(30):
+            obs = robot.get_observation()
+            
+            # Check mean brightness (ensures the frame isn't just noise/black)
+            results = {cam: obs[cam].mean() for cam in robot.cameras}
+            all_active = all(v > 10.0 for v in results.values()) # Threshold of 10/255
+            
+            if all_active:
+                print(f"✅ All {len(results)} cameras active (Mean brightness: {results})")
+                break
+            else:
+                inactive = [k for k, v in results.items() if v <= 10.0]
+                print(f"⌛ Waiting for: {inactive} (Means: {results})...")
+            time.sleep(0.5)
+        else:
+            print("❌ CRITICAL: Cameras failed to produce bright images.")
 
         client = websocket_client_policy.WebsocketClientPolicy(host=OPENPI_SERVER_IP, port=8000)
         action_horizon =50
@@ -418,11 +451,10 @@ def main():
                     events["stop_inference"] = True
                     break
 
-                left_obs = robot.bus_left_base.sync_read("Present_Position", robot.left_arm_motors)
-                right_obs = robot.bus_right_head.sync_read("Present_Position", robot.right_arm_motors)
-                joint_obs = {**left_obs, **right_obs}
-                joint_states = np.array([float(joint_obs[n]) for n in FULL_START_POS.keys()], dtype=float)
-                camera_obs = robot.get_camera_observation()
+                full_obs = robot.get_observation()
+                joint_states = np.array([float(full_obs[f"{n}.pos"]) for n in FULL_START_POS.keys()], dtype=float)
+                camera_obs = full_obs
+
                 observation = {
                 "image/head": image_tools.convert_to_uint8(
                     image_tools.resize_with_pad(camera_obs['head'], 224, 224)

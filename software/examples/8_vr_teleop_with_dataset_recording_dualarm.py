@@ -4,6 +4,10 @@ VR control for XLerobot robot
 Uses handle_vr_input with delta action control
 """
 
+# Run with:
+# PYTHONPATH=/home/era-agx-orin/ERA_Lab/lerobot/src:/home/era-agx-orin/ERA_Lab/XLeRobot:/home/era-agx-orin/ERA_Lab/XLeRobot/software/src python /home/era-agx-orin/ERA_Lab/XLeRobot/software/examples/8_vr_teleop_with_dataset_recording_dualarm.py
+
+
 # Standard library imports
 import asyncio
 import logging
@@ -19,7 +23,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 # Local imports
 from XLeVR.vr_monitor import VRMonitor
 from XLeVR.xlevr.inputs.base import ControlMode
-from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
+from lerobot.robots.xlerobot_2wheels import XLerobot2WheelsConfig, XLerobot2Wheels
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.model.kinematics import RobotKinematics
 from lerobot.processor import RobotAction, RobotObservation, RobotProcessorPipeline
@@ -28,7 +32,7 @@ from lerobot.processor.converters import (
     robot_action_to_transition,
     transition_to_robot_action,
 )
-from lerobot.robots.so100_follower.robot_kinematic_processor import (
+from robots.so100_follower.robot_kinematic_processor import (
     EEReferenceAndDelta,
     EEBoundsAndSafety,
     GripperVelocityToJoint,
@@ -37,7 +41,7 @@ from lerobot.robots.so100_follower.robot_kinematic_processor import (
 from lerobot.utils.quadratic_spline_via_ipol import Via, Limits, QuadraticSplineInterpolator
 from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.datasets.utils import hw_to_dataset_features, build_dataset_frame
+from lerobot.datasets.feature_utils import hw_to_dataset_features, build_dataset_frame
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -63,25 +67,37 @@ RIGHT_JOINT_MAP = {
 }
 
 FULL_START_POS = {
-    "left_arm_shoulder_pan": 0.0,
-    "left_arm_shoulder_lift": -90.0,
-    "left_arm_elbow_flex": 45.0,
-    "left_arm_wrist_flex": 85.0,
-    "left_arm_wrist_roll": -90.0,
-    "left_arm_gripper": 50.0,
-    "right_arm_shoulder_pan": 0.0,
-    "right_arm_shoulder_lift": -90.0,
-    "right_arm_elbow_flex": 45.0,
-    "right_arm_wrist_flex": 85.0,
-    "right_arm_wrist_roll": -90.0,
-    "right_arm_gripper": 50.0,
+    "left_arm_shoulder_pan": -10.2,
+    "left_arm_shoulder_lift": 5.71,
+    "left_arm_elbow_flex": -1.58,
+    "left_arm_wrist_flex": 8.48,
+    "left_arm_wrist_roll": -11.65,
+    "left_arm_gripper": 43.12,
+    "right_arm_shoulder_pan": -5.36,
+    "right_arm_shoulder_lift": 2.64,
+    "right_arm_elbow_flex": 2.95,
+    "right_arm_wrist_flex": -3.03,
+    "right_arm_wrist_roll": -4.04,
+    "right_arm_gripper": 40.0,
 }
 
-TASK_DESCRIPTION = "Put the pieces on the table into the box and close the lid"
-HF_REPO_ID = "xuweiwu/bimanual-toy-box-cleanup"
-FPS = 60
+# Task parameters
+TASK_DESCRIPTION = "Pick up the K-cup and place it in the carton box."
+HF_REPO_ID = "baodn19/pick_place_K_cup_pi05"
+FPS = 30 # Match the FPS of the camera
 NUM_EPISODES = 50
 EPISODE_TIME_SEC = 120
+
+# local helper that clears the existing queues and cached goals under the monitor lock.
+def reset_vr_goal_queues(vr_monitor):
+    with vr_monitor._goal_lock:
+        for queue in vr_monitor._goal_queues.values():
+            queue.clear()
+        vr_monitor.latest_goal = None
+        vr_monitor.left_goal = None
+        vr_monitor.right_goal = None
+        vr_monitor.headset_goal = None
+
 
 class SimpleTeleopArm:
     """
@@ -111,7 +127,7 @@ class SimpleTeleopArm:
 
         joint_names_wo_gripper = [j for j in self.target_positions if j != 'gripper']
         self.kinematics= RobotKinematics(
-            urdf_path="path_to_so101_new_calib_urdf", 
+            urdf_path="/home/era-agx-orin/ERA_Lab/SO-ARM100/Simulation/SO101/so101_new_calib.urdf", 
             target_frame_name="gripper_frame_link",
             joint_names=joint_names_wo_gripper,
         )
@@ -119,7 +135,7 @@ class SimpleTeleopArm:
             [   
                 EEReferenceAndDelta(
                     kinematics=self.kinematics,
-                    end_effector_step_sizes={"x": 0.5, "y": 0.5, "z": 0.5},
+                    end_effector_step_sizes={"x": 1.0, "y": 1.0, "z": 1.0}, # Scaler for robot delta positions in meters 
                     motor_names=list(self.target_positions.keys()),
                     use_latched_reference=False,
                 ),
@@ -134,7 +150,7 @@ class SimpleTeleopArm:
                 InverseKinematicsEEToJoints(
                     kinematics=self.kinematics,
                     motor_names=list(self.target_positions.keys()),
-                    weights={"position": 1.0, "orientation": 0.1},
+                    weights={"position": 1.0, "orientation": 1.0},
                     initial_guess_current_joints=False,
                 ),
             ],
@@ -144,8 +160,10 @@ class SimpleTeleopArm:
         self.ref_action_when_disabled = None
         
         # Delta control state variables for VR input
-        self.vr_relative_position_scaling = 1.2
+        self.vr_relative_position_scaling = 4 # OG: 1.2
         self.gripper_vel_step = 1.2
+        self.debug_vr_mapping = True
+        self._last_vr_debug_print_t = 0.0
 
         self.vr_calibrated = False
         self.vr_headset_to_base = Rotation.from_matrix(np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=float))
@@ -313,10 +331,12 @@ class SimpleTeleopArm:
         vr_relative_position = vr_goal.relative_position # [x, y, z] in meters in vr frame
         vr_relative_rotvec = vr_goal.relative_rotvec # [wx, wy, wz] in radian in vr frame
 
-        # Avoid commanding small motions
+        # Avoid commanding sensor noise, but keep slow hand motion. The VR server
+        # sends frame-to-frame deltas, so a large deadzone discards real movement.
+        # Size of the translational and rotation delta thresholds for ignoring small movements
         relative_position_norm = float(np.linalg.norm(vr_relative_position))
         relative_rotvec_norm = float(np.linalg.norm(vr_relative_rotvec))
-        if relative_position_norm < 0.001 and relative_rotvec_norm < 0.005:
+        if relative_position_norm < 0.00005 and relative_rotvec_norm < 0.0005:
             vr_relative_position = np.array([0, 0, 0])
             vr_relative_rotvec = np.array([0, 0, 0])
         
@@ -334,8 +354,8 @@ class SimpleTeleopArm:
         delta_wy = ee_relative_rotvec[1]
         delta_wz = ee_relative_rotvec[2]
         
-        delta_pos_limit = 0.003  # Maximum delta per update (meters)
-        delta_rotvec_limit = 3*(np.pi/180)  # Maximum angle delta per update (radians)
+        delta_pos_limit = 0.02  # Maximum delta per update (meters)
+        delta_rotvec_limit = 10 * (np.pi / 180)  # Maximum angle delta per update (radians)
         
         # Limit delta values to prevent sudden movements
         delta_x = max(-delta_pos_limit, min(delta_pos_limit, delta_x))
@@ -357,24 +377,39 @@ class SimpleTeleopArm:
         }
 
         grip_moved = False
-        if abs(delta_x) > 0.1*delta_pos_limit:
-            target_action["target_x"] = delta_x
+        delta_pos_deadzone = 0.0002
+        delta_rotvec_deadzone = 0.0005
+        if abs(delta_x) > delta_pos_deadzone:
+            target_action["target_x"] = float(delta_x)
             grip_moved = True
-        if abs(delta_y) > 0.1*delta_pos_limit:
-            target_action["target_y"] = delta_y
+        if abs(delta_y) > delta_pos_deadzone:
+            target_action["target_y"] = float(delta_y)
             grip_moved = True
-        if abs(delta_z) > 0.1*delta_pos_limit:
-            target_action["target_z"] = delta_z
+        if abs(delta_z) > delta_pos_deadzone:
+            target_action["target_z"] = float(delta_z)
             grip_moved = True
-        if abs(delta_wx) > 0.1*delta_rotvec_limit:
-            target_action["target_wx"] = delta_wx
+        if abs(delta_wx) > delta_rotvec_deadzone:
+            target_action["target_wx"] = float(delta_wx)
             grip_moved = True
-        if abs(delta_wy) > 0.1*delta_rotvec_limit:
-            target_action["target_wy"] = delta_wy
+        if abs(delta_wy) > delta_rotvec_deadzone:
+            target_action["target_wy"] = float(delta_wy)
             grip_moved = True
-        if abs(delta_wz) > 0.1*delta_rotvec_limit:
-            target_action["target_wz"] = delta_wz
+        if abs(delta_wz) > delta_rotvec_deadzone:
+            target_action["target_wz"] = float(delta_wz)
             grip_moved = True
+
+        if self.debug_vr_mapping:
+            now = time.perf_counter()
+            if now - self._last_vr_debug_print_t > 0.25:
+                self._last_vr_debug_print_t = now
+                print(
+                    f"[VR MAP {self.prefix}] "
+                    f"raw_pos={np.round(vr_relative_position, 5).tolist()} "
+                    f"raw_pos_norm={relative_position_norm:.5f} "
+                    f"scale={self.vr_relative_position_scaling:.2f} "
+                    f"mapped_xyz={[round(float(v), 5) for v in (delta_x, delta_y, delta_z)]} "
+                    f"action_xyz={[round(float(target_action[k]), 5) for k in ('target_x', 'target_y', 'target_z')]}"
+                )
 
         # Handle gripper state directly
         thumb = getattr(vr_goal, "thumbstick", None)
@@ -607,11 +642,16 @@ def main():
     print("="*50)
 
     robot, vr_monitor = None, None
-    robot_name = "xlerobot"
+    robot_name = "xlerobot_2wheels"
     try:
-        robot_config = XLerobotConfig(id=robot_name, use_degrees=True)
-        robot = XLerobot(robot_config)
+        robot_config = XLerobot2WheelsConfig(id=robot_name, use_degrees=True)
+        robot = XLerobot2Wheels(robot_config)
         robot.connect()
+
+        # Assign bus1 and bus2 to bus_left_base and bus_right_head
+        robot.bus_left_base = robot.bus1
+        robot.bus_right_head = robot.bus2
+
         print(f"[INIT] Successfully connected to robot")
         if robot.is_calibrated:
             print(f"[INIT] Robot is calibrated and ready to use!")
@@ -673,7 +713,7 @@ def main():
             start_episode_t = None
             episode_started = False
             timestamp = 0
-            vr_monitor.reset_goal_queues()
+            reset_vr_goal_queues(vr_monitor)
             print(f"✅ Start episode: {recorded_episodes}")
             
             while timestamp < EPISODE_TIME_SEC:

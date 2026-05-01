@@ -571,3 +571,21 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+'''
+PYTHONPATH="/home/era-agx-orin/ERA_Lab/XLeRobot/software:/home/era-agx-orin/ERA_Lab/lerobot/src:$PYTHONPATH" \
+python software/examples/record.py \
+  --robot.type=xlerobot \
+  --teleop.type=xlerobot_vr \
+  --dataset.repo_id=local/kcup_baseline_v2 \
+  --dataset.num_episodes=5 \
+  --dataset.single_task="Pick up the K-cup and place it in the carton box." \
+  --robot.cameras='{
+    "left_wrist": {"type": "opencv", "index_or_path": "/dev/video0", "width": 640, "height": 480, "fps": 30, "fourcc": "MJPG"},
+    "right_wrist": {"type": "opencv", "index_or_path": "/dev/video2", "width": 640, "height": 480, "fps": 30, "fourcc": "MJPG"},
+    "head": {"type": "opencv", "index_or_path": "/dev/video4", "width": 640, "height": 480, "fps": 30, "fourcc": "MJPG"}
+  }'
+  '''
+  

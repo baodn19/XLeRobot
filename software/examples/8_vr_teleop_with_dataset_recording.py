@@ -2,8 +2,12 @@
 """
 VR control for XLerobot robot
 Uses handle_vr_input with delta action control
-"""
 
+Quickstart:
+cd ~/ERA_Lab/XLeRobot
+PYTHONPATH="/home/era-agx-orin/ERA_Lab/XLeRobot/software:/home/era-agx-orin/ERA_Lab/lerobot/src:$PYTHONPATH" python software/examples/8_vr_teleop_with_dataset_recording.py
+
+"""
 # Standard library imports
 import asyncio
 import logging
@@ -19,12 +23,13 @@ import numpy as np
 
 # Local imports
 from XLeVR.vr_monitor import VRMonitor
-from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
+# from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
+from lerobot.robots.xlerobot_2wheels import XLerobot2WheelsConfig, XLerobot2Wheels
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.model.SO101Robot import SO101Kinematics
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.datasets.utils import hw_to_dataset_features, build_dataset_frame
+from lerobot.datasets.feature_utils import hw_to_dataset_features, build_dataset_frame
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -152,7 +157,7 @@ class SimpleTeleopArm:
         # Explicitly set wrist_flex
         self.target_positions["wrist_flex"] = 0.0
         
-        action = self.p_control_action(robot)
+        action, _ = self.p_control_action(robot) # Unpack the tuple
         robot.send_action(action)
 
     def handle_vr_input(self, vr_goal, gripper_state):
@@ -280,9 +285,9 @@ class SimpleTeleopArm:
             dict: Action dictionary with position commands for each joint
         """
         if self.prefix=="left":
-            obs_raw = robot.bus_1.sync_read("Present_Position", robot.left_arm_motors)
+            obs_raw = robot.bus1.sync_read("Present_Position", robot.left_arm_motors)
         else:
-            obs_raw = robot.bus_2.sync_read("Present_Position", robot.right_arm_motors)
+            obs_raw = robot.bus2.sync_read("Present_Position", robot.right_arm_motors)
 
         obs_pos_suffix = {f"{v}.pos": obs_raw[v] for v in self.joint_map.values()}
         current = {k: obs_raw[v] for k, v in self.joint_map.items()}
@@ -331,7 +336,7 @@ class SimpleHeadControl:
     def move_to_zero_position(self, robot):
         print(f"[HEAD] Moving to Zero Position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
-        action = self.p_control_action(robot)
+        action, _ = self.p_control_action(robot) # Unpack the tuple
         robot.send_action(action)
 
     def p_control_action(self, robot):
@@ -344,7 +349,7 @@ class SimpleHeadControl:
         Returns:
             dict: Action dictionary with position commands for head motors
         """
-        obs_raw = robot.bus_1.sync_read("Present_Position", robot.head_motors)
+        obs_raw = robot.bus1.sync_read("Present_Position", robot.head_motors)
         action = {}
         for motor in self.target_positions:
             current = obs_raw.get(HEAD_MOTOR_MAP[motor], 0.0)
@@ -583,9 +588,11 @@ def main():
     try:
         # Try to use saved calibration file to avoid recalibrating each time
         # You can modify robot_id here to match your robot configuration
-        robot_config = XLerobotConfig()  # Can be modified to your robot ID
-        robot = XLerobot(robot_config)
-        
+        # robot_config = XLerobotConfig()  # Can be modified to your robot ID
+        # robot = XLerobot(robot_config)
+        robot_config = XLerobot2WheelsConfig(id="xlerobot", use_degrees=True)
+        robot = XLerobot2Wheels(robot_config)
+
         try:
             robot.connect()
             print(f"[MAIN] Successfully connected to robot")
@@ -676,7 +683,7 @@ def main():
             robot.send_action(action)
             
             # Get camera frames through async_read
-            camera_obs = robot.get_camera_observation()
+            camera_obs = robot.get_observation()
 
             # Merge action and observation features for new dataset frame
             if (ENABLE_LEFT_HAND and left_arm):

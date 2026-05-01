@@ -142,8 +142,8 @@ class VRWebSocketServer(BaseInputProvider):
         finally:
             self.clients.discard(websocket)
             # Handle grip releases when client disconnects
-            await self.handle_grip_release('left')
-            await self.handle_grip_release('right')
+            await self.handle_grip_release('left', {})
+            await self.handle_grip_release('right', {})
             logger.info(f"VR client {client_address} cleanup complete")
     
     async def process_controller_data(self, data: Dict):
