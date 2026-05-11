@@ -42,6 +42,7 @@ from lerobot.utils.quadratic_spline_via_ipol import Via, Limits, QuadraticSpline
 from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.datasets.feature_utils import hw_to_dataset_features, build_dataset_frame
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -644,9 +645,22 @@ def main():
     print("="*50)
 
     robot, vr_monitor = None, None
+    left_arm_teleop, right_arm_teleop, joint_ipol = None, None, None
     robot_name = "xlerobot_2wheels"
     try:
         robot_config = XLerobot2WheelsConfig(id=robot_name, use_degrees=True)
+
+        # Set up cameras
+        robot_config.cameras["left_wrist"] = OpenCVCameraConfig(
+            index_or_path="/dev/video0", fps=30, width=640, height=480, fourcc="MJPG"
+        )
+        robot_config.cameras["right_wrist"] = OpenCVCameraConfig(
+            index_or_path="/dev/video2", fps=30, width=640, height=480, fourcc="MJPG"
+        )
+        robot_config.cameras["head"] = OpenCVCameraConfig(
+            index_or_path="/dev/video4", fps=30, width=640, height=480, fourcc="MJPG"
+        )
+
         robot = XLerobot2Wheels(robot_config)
         robot.connect()
 
@@ -855,8 +869,9 @@ def main():
     finally:
         # Cleanup
         if robot:
-            joint_ipol.plan_to_target(robot, left_arm_teleop, right_arm_teleop, ctrl_freq=200)
-            joint_ipol.execute_plan(robot, left_arm_teleop, right_arm_teleop)
+            if joint_ipol is not None and left_arm_teleop is not None and right_arm_teleop is not None:
+                joint_ipol.plan_to_target(robot, left_arm_teleop, right_arm_teleop, ctrl_freq=200)
+                joint_ipol.execute_plan(robot, left_arm_teleop, right_arm_teleop)
             robot.disconnect()
         
         if dataset:
