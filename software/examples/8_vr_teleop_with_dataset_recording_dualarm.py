@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 import traceback
+from pathlib import Path
 from scipy.spatial.transform import Rotation
 
 # Third-party imports
@@ -84,10 +85,12 @@ FULL_START_POS = {
 
 # Task parameters
 TASK_DESCRIPTION = "Pick up the K-cup and place it in the carton box."
-HF_REPO_ID = "/home/era-agx-orin/ERA_Lab/xlerobot/tasks/pick_place_K_cup_pi05"
+DATASET_ROOT = Path("/home/era-agx-orin/ERA_Lab/xlerobot/tasks/pick_place_K_cup_pi05")
+HF_REPO_ID = DATASET_ROOT.name
 FPS = 30 # Match the FPS of the camera
-NUM_EPISODES = 2
+NUM_EPISODES = 1
 EPISODE_TIME_SEC = 120
+RESUME_DATASET = True
 
 # local helper that clears the existing queues and cached goals under the monitor lock.
 def reset_vr_goal_queues(vr_monitor):
@@ -623,14 +626,23 @@ def init_dataset(robot):
     camera_features = hw_to_dataset_features(robot._cameras_ft, OBS_STR)
     dataset_features = {**customized_features, **camera_features}
 
-    dataset = LeRobotDataset.create(
-        repo_id=HF_REPO_ID,
-        fps=FPS,
-        features=dataset_features,
-        robot_type=robot.name,
-        image_writer_processes=10,
-        image_writer_threads=5,
-    )
+    if RESUME_DATASET and (DATASET_ROOT / "meta" / "info.json").exists():
+        dataset = LeRobotDataset.resume(
+            repo_id=HF_REPO_ID,
+            root=DATASET_ROOT,
+            image_writer_processes=10,
+            image_writer_threads=5,
+        )
+    else:
+        dataset = LeRobotDataset.create(
+            repo_id=HF_REPO_ID,
+            root=DATASET_ROOT,
+            fps=FPS,
+            features=dataset_features,
+            robot_type=robot.name,
+            image_writer_processes=10,
+            image_writer_threads=5,
+        )
     
     return dataset
 
